@@ -1,0 +1,74 @@
+// ==UserScript==
+// @name         Instagram Ghost Mode (No Seen / No Typing)
+// @namespace    ENI & Jose
+// @version      2.0
+// @description  Blocks 'Seen' and 'Typing' receipts on Instagram Web.
+// @author       t4r1k255
+// @match        *://*.instagram.com/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const BLOCK_PATTERNS = [
+        /mark_as_seen/i,
+        /typing/i,
+        /markSeen/i,
+        /SendTyping/i,
+        /view_conn/i
+    ];
+
+    const isBlockedUrl = (url) => BLOCK_PATTERNS.some(p => p.test(url));
+    const isBlockedBody = (body) => {
+        if (!body) return false;
+        const str = typeof body === 'string' ? body : JSON.stringify(body);
+        return BLOCK_PATTERNS.some(p => p.test(str));
+    };
+
+    console.log('%c[Ghost Mode] Aktif ✓', 'color: #00ff00; font-weight: bold; font-size: 14px;');
+
+    // 1. FETCH ENGELLEME
+    const originalFetch = window.fetch;
+    window.fetch = function(...args) {
+        const url = (args[0] instanceof Request ? args[0].url : args[0]) || '';
+        const init = args[1] || {};
+
+        if (isBlockedUrl(url) || isBlockedBody(init.body)) {
+            console.log(`%c[Blocked] ${url}`, 'color: #ff4500;');
+            return Promise.resolve(new Response('{}', { status: 200 }));
+        }
+
+        return originalFetch.apply(this, arguments);
+    };
+
+    // 2. XMLHttpRequest ENGELLEME
+    const originalOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+        this._xhrUrl = url;
+        return originalOpen.apply(this, arguments);
+    };
+
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function(body) {
+        if (isBlockedUrl(this._xhrUrl) || isBlockedBody(body)) {
+            console.log(`%c[Blocked XHR] ${this._xhrUrl}`, 'color: #ff4500;');
+            return;
+        }
+        return originalSend.apply(this, arguments);
+    };
+
+    // 3. WEBSOCKET ENGELLEME (isteğe bağlı)
+    const originalWS = window.WebSocket;
+    window.WebSocket = new Proxy(originalWS, {
+        construct(target, args) {
+            if (isBlockedUrl(args[0])) {
+                console.log(`%c[Blocked WS] ${args[0]}`, 'color: #ff4500;');
+                throw new Error('WebSocket blocked');
+            }
+            return new target(...args);
+        }
+    });
+
+})();
