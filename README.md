@@ -1,6 +1,8 @@
 Instagram Ghost Mode
 Instagram Web üzerinde iz bırakmadan gezinmenizi sağlayan, gizlilik odaklı bir Userscript.
 
+Güncel olarak çalışmıyor olabilir, aktif olarak üzerinde çalışıyorum.
+
 🚀 Özellikler
 No Seen: Gelen mesajları okuduğunuzda karşı tarafa "Görüldü" bilgisi gitmez.
 
