@@ -1,164 +1,266 @@
 // ==UserScript==
-// @name         Instagram Ghost Mode (Enhanced)
-// @namespace    Instagram-Ghost-Mode-No-Seen-No-Typing
-// @version      3.0
-// @description  Blocks 'Seen' and 'Typing' indicators on Instagram Web
-// @author       t4r1k255
+// @name         Instagram Ghost Mode v12
+// @namespace    ghost-mode-ws
+// @version      12.2
+// @description  Okundu bilgisi, yazıyor göstergesi ve presence gönderimini engeller
+// @match        *://instagram.com/*
 // @match        *://*.instagram.com/*
-// @grant        none
 // @run-at       document-start
+// @grant        unsafeWindow
+// @author       t4r1k255
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
-    
-    // Instagram GraphQL API pattern'ları
-    const GRAPHQL_PATTERNS = [
-        'DirectMarkItemSeenMutation',
-        'DirectTypingIndicatorMutation', 
-        'MarkDirectThreadItemSeen',
-        'IndicateActivityInDirectThread',
-        'DirectSendTypingIndicator',
-        'seen_state'
-    ];
-    
-    const ENDPOINT_PATTERNS = [
-        '/api/v1/direct_v2/threads/',
-        '/api/v1/direct_v2/inbox/mark_seen',
-        '/api/graphql',
-        'direct_v2/threads'
-    ];
-    
-    console.log('%c[Ghost Mode] Active ✓', 'color: #00ff00; font-weight: bold; font-size: 14px;');
-    
-    // Helper function - URL kontrolü
-    const isBlockedUrl = (url) => {
-        if (!url) return false;
-        return ENDPOINT_PATTERNS.some(pattern => url.includes(pattern));
-    };
-    
-    // Helper function - Body kontrolü
-    const isBlockedBody = (body) => {
-        if (!body) return false;
-        
+
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+
+    console.log('%c[👻] Ghost Mode v12.2 - Başlatılıyor...', 'background:#ff00ff;color:white;font-weight:bold;padding:8px;');
+
+    const stats = { blocked: 0, allowed: 0 };
+
+    // Sadece karşı tarafa gönderilen okundu/yazıyor sinyallerini hedefle.
+    const SIGNAL_URL_PATTERN = /\/(?:api\/v1\/)?direct_v2\/threads\/[^?#]*(?:\/seen\/?|\/activity\/?|\/typing\/?|mark_seen|activity_indicator)|\/(?:api\/v1\/)?direct_v2\/threads\/broadcast\/typing|\/presence\//i;
+    const SIGNAL_KEY_PATTERN = /(?:^|[&?{,\s])["']?(?:mark_seen|seen_at|seen_state|thread_seen|read_receipt|is_typing|typing|typing_indicator|typing_status|typing_state|activity_indicator|presence|t_tp|t_fs)["']?\s*[:=]/i;
+    const SIGNAL_MUTATION_PATTERN = /(?:operationName["']?\s*[:=]\s*["']?|mutation\s+|query\s+)(?:markThreadSeen|markDirectThreadSeen|markMessageSeen|mark_seen_mutation|setTyping)\b/i;
+
+    // Asla engellenmeyecek URL'ler.
+    const WHITELIST_URL = /(bootloader-endpoint|LSVerify)/i;
+
+    function bodyToString(body) {
+        if (body == null) {
+            return '';
+        }
+        if (typeof body === 'string') {
+            return body;
+        }
+        if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+            return body.toString();
+        }
+        if (typeof FormData !== 'undefined' && body instanceof FormData) {
+            const parts = [];
+            body.forEach((value, key) => {
+                parts.push(`${key}=${typeof value === 'string' ? value : '[file]'}`);
+            });
+            return parts.join('&');
+        }
+        return String(body);
+    }
+
+    async function getFetchBody(input, init) {
+        if (init && init.body != null) {
+            return bodyToString(init.body);
+        }
+        if (input && typeof input.clone === 'function') {
+            try {
+                return await input.clone().text();
+            } catch (e) {
+                return '';
+            }
+        }
+        return '';
+    }
+
+    function normalizeForMatch(value) {
+        const text = String(value || '');
         try {
-            const str = typeof body === 'string' ? body : JSON.stringify(body);
-            
-            // GraphQL mutation kontrolü
-            if (GRAPHQL_PATTERNS.some(pattern => str.includes(pattern))) {
-                return true;
-            }
-            
-            // Form data kontrolü
-            if (str.includes('mark_seen') || str.includes('typing')) {
-                return true;
-            }
-            
-            // JSON payload kontrolü
-            if (str.match(/("seen"|"typing"|"mark_seen")\s*:/i)) {
-                return true;
-            }
-            
+            return `${text}\n${decodeURIComponent(text.replace(/\+/g, ' '))}`;
         } catch (e) {
-            // Binary data veya parse edilemeyen içerik
+            return text;
         }
-        
-        return false;
-    };
-    
-    // 1. FETCH INTERCEPT
-    const originalFetch = window.fetch;
-    window.fetch = function(...args) {
-        const url = args[0] instanceof Request ? args[0].url : String(args[0]);
-        const init = args[1] || {};
-        
-        // URL bazlı engelleme
-        if (isBlockedUrl(url)) {
-            console.log(`%c[🚫 Blocked URL] ${url.substring(0, 80)}...`, 'color: #ff4500; font-weight: bold;');
-            return Promise.resolve(new Response('{"status":"ok"}', { 
-                status: 200,
-                headers: { 'Content-Type': 'application/json' }
-            }));
-        }
-        
-        // Body bazlı engelleme
-        if (init.body && isBlockedBody(init.body)) {
-            console.log(`%c[🚫 Blocked Body] ${url.substring(0, 80)}...`, 'color: #ff4500; font-weight: bold;');
-            return Promise.resolve(new Response('{"status":"ok"}', { 
-                status: 200,
-                headers: { 'Content-Type': 'application/json' }
-            }));
-        }
-        
-        return originalFetch.apply(this, args);
-    };
-    
-    // 2. XMLHttpRequest INTERCEPT
-    const XHR = XMLHttpRequest.prototype;
-    
-    const originalOpen = XHR.open;
-    XHR.open = function(method, url, ...rest) {
-        this._ghostUrl = url;
-        this._ghostMethod = method;
-        return originalOpen.call(this, method, url, ...rest);
-    };
-    
-    const originalSend = XHR.send;
-    XHR.send = function(body) {
-        if (isBlockedUrl(this._ghostUrl) || isBlockedBody(body)) {
-            console.log(`%c[🚫 Blocked XHR] ${this._ghostMethod} ${this._ghostUrl}`, 'color: #ff4500; font-weight: bold;');
-            
-            // Fake successful response
-            Object.defineProperty(this, 'readyState', { writable: true, value: 4 });
-            Object.defineProperty(this, 'status', { writable: true, value: 200 });
-            Object.defineProperty(this, 'response', { writable: true, value: '{"status":"ok"}' });
-            Object.defineProperty(this, 'responseText', { writable: true, value: '{"status":"ok"}' });
-            
-            setTimeout(() => {
-                if (this.onreadystatechange) this.onreadystatechange();
-                if (this.onload) this.onload();
-            }, 0);
-            
-            return;
-        }
-        
-        return originalSend.call(this, body);
-    };
-    
-    // 3. WebSocket INTERCEPT
-    const OriginalWebSocket = window.WebSocket;
-    window.WebSocket = function(url, protocols) {
-        const ws = new OriginalWebSocket(url, protocols);
-        
-        // WebSocket send metodunu intercept et
-        const originalWsSend = ws.send;
-        ws.send = function(data) {
-            if (isBlockedBody(data)) {
-                console.log('%c[🚫 Blocked WebSocket]', 'color: #ff4500; font-weight: bold;', data.substring(0, 100));
-                return;
+    }
+
+    function isSignalBody(body, includeMutation) {
+        const text = normalizeForMatch(body);
+        return SIGNAL_KEY_PATTERN.test(text) || (includeMutation && SIGNAL_MUTATION_PATTERN.test(text));
+    }
+
+    function isSignalRequest(url, body) {
+        return SIGNAL_URL_PATTERN.test(url) || isSignalBody(body, url.includes('/graphql/'));
+    }
+
+    function shouldBlockPayload(payload) {
+        let text = '';
+
+        if (typeof payload === 'string') {
+            text = payload;
+        } else if (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
+            try {
+                const bytes = payload instanceof ArrayBuffer
+                    ? new Uint8Array(payload)
+                    : new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+                text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+            } catch (e) {
+                text = '';
             }
-            return originalWsSend.call(this, data);
+        }
+
+        return isSignalBody(text, true);
+    }
+
+    function fakeJSONResponse(body) {
+        return new win.Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        });
+    }
+
+    // WEBSOCKET HOOK
+    const OrigWS = win.WebSocket;
+
+    if (typeof OrigWS === 'function') {
+        function GhostWebSocket(url, ...args) {
+            const ws = new OrigWS(url, ...args);
+            const origSend = ws.send.bind(ws);
+
+            ws.send = function (data) {
+                if (shouldBlockPayload(data)) {
+                    stats.blocked++;
+                    const preview = typeof data === 'string' ? ` ${data.substring(0, 80)}` : '';
+                    console.log(`%c[🚫 WS BLOCKED #${stats.blocked}]${preview}`, 'background:red;color:white;font-weight:bold;');
+                    return undefined;
+                }
+
+                stats.allowed++;
+                return origSend(data);
+            };
+
+            ws.addEventListener('open', () => {
+                console.log(`%c[WS OPEN] ${String(url).substring(0, 100)}`, 'color:#00aaff;');
+            });
+
+            return ws;
+        }
+
+        GhostWebSocket.prototype = OrigWS.prototype;
+        Object.setPrototypeOf(GhostWebSocket, OrigWS);
+
+        for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(OrigWS))) {
+            try {
+                Object.defineProperty(GhostWebSocket, key, descriptor);
+            } catch (e) {}
+        }
+
+        win.WebSocket = GhostWebSocket;
+    }
+
+    // FETCH HOOK
+    const origFetch = win.fetch;
+
+    if (typeof origFetch === 'function' && typeof win.Response === 'function') {
+        win.fetch = async function (...args) {
+            const input = args[0];
+            const init = args[1];
+            const url = String((input && input.url) || input || '');
+            const body = await getFetchBody(input, init);
+
+            // Whitelist: geç.
+            if (WHITELIST_URL.test(url)) {
+                stats.allowed++;
+                return origFetch.apply(this, args);
+            }
+
+            // GraphQL: sadece gerçek seen/typing mutation'larını engelle.
+            if (url.includes('/graphql/')) {
+                if (isSignalBody(body, true)) {
+                    stats.blocked++;
+                    console.log(`%c[🚫 FETCH GQL BLOCKED #${stats.blocked}] ${url.substring(0, 80)}`, 'background:red;color:white;font-weight:bold;');
+                    return fakeJSONResponse('{"data":{},"status":"ok"}');
+                }
+                stats.allowed++;
+                return origFetch.apply(this, args);
+            }
+
+            // Diğer tüm istekler: sadece okundu/yazıyor sinyalleri.
+            if (isSignalRequest(url, body)) {
+                stats.blocked++;
+                console.log(`%c[🚫 FETCH BLOCKED #${stats.blocked}] ${url.substring(0, 80)}`, 'background:red;color:white;font-weight:bold;');
+                return fakeJSONResponse('{"ok":true}');
+            }
+
+            stats.allowed++;
+            return origFetch.apply(this, args);
         };
-        
-        console.log('%c[WebSocket Connected]', 'color: #00aaff;', url);
-        return ws;
+    }
+
+    // XHR HOOK
+    const XHRProto = win.XMLHttpRequest && win.XMLHttpRequest.prototype;
+
+    if (XHRProto) {
+        const origOpen = XHRProto.open;
+        const origSendX = XHRProto.send;
+
+        XHRProto.open = function (method, url, ...rest) {
+            this._ghostUrl = String(url == null ? '' : url);
+            return origOpen.call(this, method, url, ...rest);
+        };
+
+        XHRProto.send = function (body) {
+            const url = this._ghostUrl == null ? '' : this._ghostUrl;
+            const bodyStr = bodyToString(body);
+
+            // Whitelist: geç.
+            if (WHITELIST_URL.test(url)) {
+                stats.allowed++;
+                return origSendX.call(this, body);
+            }
+
+            // GraphQL: sadece seen/typing mutation engelle.
+            if (url.includes('/graphql/')) {
+                if (isSignalBody(bodyStr, true)) {
+                    stats.blocked++;
+                    console.log(`%c[🚫 XHR GQL BLOCKED #${stats.blocked}] ${url.substring(0, 80)}`, 'background:red;color:white;font-weight:bold;');
+                    return fakeXHR(this, '{"data":{},"status":"ok"}');
+                }
+                stats.allowed++;
+                return origSendX.call(this, body);
+            }
+
+            // Diğer tüm istekler: sadece okundu/yazıyor sinyalleri.
+            if (isSignalRequest(url, bodyStr)) {
+                stats.blocked++;
+                console.log(`%c[🚫 XHR BLOCKED #${stats.blocked}] ${url.substring(0, 80)}`, 'background:red;color:white;font-weight:bold;');
+                return fakeXHR(this, '{"ok":true}');
+            }
+
+            stats.allowed++;
+            return origSendX.call(this, body);
+        };
+    }
+
+    function fakeXHR(xhr, responseBody) {
+        try {
+            Object.defineProperty(xhr, 'readyState', { get: () => 4, configurable: true });
+            Object.defineProperty(xhr, 'status', { get: () => 200, configurable: true });
+            Object.defineProperty(xhr, 'statusText', { get: () => 'OK', configurable: true });
+            Object.defineProperty(xhr, 'responseText', { get: () => responseBody, configurable: true });
+            Object.defineProperty(xhr, 'response', { get: () => responseBody, configurable: true });
+        } catch (e) {}
+
+        setTimeout(() => {
+            try { xhr.dispatchEvent(new Event('readystatechange')); } catch (e) {}
+            try { xhr.dispatchEvent(new Event('load')); } catch (e) {}
+            try {
+                if (typeof xhr.onreadystatechange === 'function') {
+                    xhr.onreadystatechange();
+                }
+            } catch (e) {}
+            try {
+                if (typeof xhr.onload === 'function') {
+                    xhr.onload();
+                }
+            } catch (e) {}
+        }, 10);
+
+        return undefined;
+    }
+
+    // DURUM KOMUTU
+    win.ghostStatus = () => {
+        console.clear();
+        console.log('%c[👻] GHOST MODE v12.2 - DURUM', 'background:#ff00ff;color:white;font-weight:bold;padding:8px;');
+        console.table({ '🚫 Engellenen': stats.blocked, '✅ İzin Verilen': stats.allowed });
     };
-    
-    // WebSocket prototype'ını koru
-    window.WebSocket.prototype = OriginalWebSocket.prototype;
-    window.WebSocket.CONNECTING = OriginalWebSocket.CONNECTING;
-    window.WebSocket.OPEN = OriginalWebSocket.OPEN;
-    window.WebSocket.CLOSING = OriginalWebSocket.CLOSING;
-    window.WebSocket.CLOSED = OriginalWebSocket.CLOSED;
-    
-    // 4. PASSIVE MODE (Opsiyonel - daha az agresif)
-    // Eğer yukarıdaki yöntem çalışmazsa, bu kısmı aktif edebilirsin
-    /*
-    window.addEventListener('beforeunload', () => {
-        console.log('%c[Ghost Mode] Cleaning up...', 'color: #ffaa00;');
-    });
-    */
-    
-    console.log('%c[Ghost Mode] All hooks installed ✓', 'color: #00ff00; font-size: 12px;');
-    
+
+    console.log('%c[✓] Ghost Mode v12.2 hazır: ghostStatus() ile istatistik görebilirsin.', 'color:#00ff88;font-weight:bold;');
 })();
